@@ -1,0 +1,138 @@
+import os
+import uuid
+import threading
+from datetime import datetime, timezone
+
+from flask import Flask, request, jsonify, render_template
+from ingestion.race_ingestion import ingest_race
+from parallel_processor import analyze_race_parallel as analyze_race
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_SIZE
+
+jobs = {}
+jobs_lock = threading.Lock()
+
+
+def process_upload(job_id, filepath):
+    try:
+        with jobs_lock:
+            jobs[job_id]["status"] = "VALIDATING"
+            jobs[job_id]["message"] = "Validating race ZIP..."
+
+        result = ingest_race(filepath)
+        result["analytics"] = analyze_race(result["hdfs_path"])
+
+        with jobs_lock:
+            jobs[job_id]["status"] = "COMPLETED"
+            jobs[job_id]["message"] = "Race successfully uploaded to HDFS"
+            jobs[job_id]["result"] = result
+            jobs[job_id]["completed_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+
+    except Exception as exc:
+        with jobs_lock:
+            jobs[job_id]["status"] = "FAILED"
+            jobs[job_id]["message"] = str(exc)
+
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No ZIP file provided"}), 400
+
+    file = request.files["file"]
+
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        return jsonify({"error": "Please upload a ZIP archive"}), 400
+
+    job_id = str(uuid.uuid4())
+    filepath = os.path.join(UPLOAD_DIR, job_id + ".zip")
+
+    file.save(filepath)
+
+    with jobs_lock:
+        jobs[job_id] = {
+            "job_id": job_id,
+            "status": "QUEUED",
+            "message": "Race upload received",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+
+    thread = threading.Thread(
+        target=process_upload,
+        args=(job_id, filepath),
+        daemon=True
+    )
+    thread.start()
+
+    return jsonify({
+        "job_id": job_id,
+        "status": "QUEUED",
+        "message": "Race upload received successfully"
+    }), 202
+
+
+@app.route("/api/jobs/<job_id>")
+def job_status(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+
+        if job is None:
+            return jsonify({"error": "Job not found"}), 404
+
+        return jsonify(job)
+
+
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "application": "F1 Race Analytics",
+        "status": "ONLINE",
+        "hadoop_home": os.environ.get("HADOOP_HOME"),
+        "hdfs_base": "/f1_data"
+    })
+
+
+@app.errorhandler(413)
+def file_too_large(error):
+    return jsonify({"error": "ZIP file exceeds 100 MB"}), 413
+
+
+
+@app.route("/api/race/current")
+def current_race():
+    try:
+        hdfs_path = (
+            "/f1_data/raw/races/season=2025/"
+            "round=1_2025_01_AUS/race"
+        )
+        return jsonify(analyze_race(hdfs_path))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=False,
+        threaded=True
+    )

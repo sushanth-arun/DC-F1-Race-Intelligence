@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+WORKDIR /worker
+COPY worker.py /worker/worker.py
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8000
+CMD ["python", "/worker/worker.py"]

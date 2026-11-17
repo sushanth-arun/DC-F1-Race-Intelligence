@@ -1,0 +1,201 @@
+const uploadForm = document.getElementById("uploadForm");
+const fileInput = document.getElementById("datasetFile");
+const fileLabel = document.getElementById("fileLabel");
+const uploadButton = document.getElementById("uploadButton");
+const uploadMessage = document.getElementById("uploadMessage");
+
+let currentJobId = null;
+let pollingTimer = null;
+
+
+async function checkHealth() {
+    try {
+        const response = await fetch("/api/health");
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error("Health check failed");
+        }
+
+        document.getElementById("systemStatus").textContent =
+            data.status;
+
+        document.getElementById("hdfsStatus").textContent =
+            data.hadoop_home ? "CONNECTED" : "UNKNOWN";
+
+    } catch (error) {
+        document.getElementById("systemStatus").textContent =
+            "OFFLINE";
+
+        document.getElementById("hdfsStatus").textContent =
+            "UNKNOWN";
+    }
+}
+
+
+fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+
+    fileLabel.textContent = file
+        ? file.name
+        : "Choose season ZIP file";
+});
+
+
+uploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const file = fileInput.files[0];
+    const season = document.getElementById("season").value;
+
+    if (!file || !file.name.toLowerCase().endsWith(".zip")) {
+        uploadMessage.textContent = "Please select a ZIP archive.";
+        return;
+    }
+
+    if (!/^\d{4}$/.test(season)) {
+        uploadMessage.textContent =
+            "Please enter a valid four-digit season.";
+        return;
+    }
+
+    if (file.size > 100 * 1024 * 1024) {
+        uploadMessage.textContent =
+            "File exceeds the 100 MB upload limit.";
+        return;
+    }
+
+    const formData = new FormData();
+
+    formData.append("file", file);
+    formData.append("season", season);
+
+    uploadButton.disabled = true;
+    uploadButton.textContent = "Uploading...";
+    uploadMessage.textContent = "Sending dataset to Flask backend...";
+
+    try {
+        const response = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Upload failed");
+        }
+
+        currentJobId = data.job_id;
+
+        document.getElementById("jobId").textContent =
+            "Job ID: " + currentJobId;
+
+        document.getElementById("jobStatus").textContent =
+            data.status;
+
+        document.getElementById("jobMessage").textContent =
+            data.message;
+
+        uploadMessage.textContent =
+            "Upload accepted. Processing has started.";
+
+        document.getElementById("progressBar").style.width = "10%";
+        document.getElementById("jobProgress").textContent = "10%";
+
+        if (pollingTimer) {
+            clearInterval(pollingTimer);
+        }
+
+        await checkJobStatus();
+
+        pollingTimer = setInterval(checkJobStatus, 2000);
+
+    } catch (error) {
+        uploadMessage.textContent = error.message;
+        uploadButton.disabled = false;
+        uploadButton.textContent = "Upload and process dataset";
+    }
+});
+
+
+async function checkJobStatus() {
+    if (!currentJobId) {
+        return;
+    }
+
+    try {
+        const response = await fetch(
+            `/api/jobs/${currentJobId}`
+        );
+
+        const job = await response.json();
+
+        if (!response.ok) {
+            throw new Error(job.error || "Unable to retrieve job");
+        }
+
+        const status = job.status;
+
+        document.getElementById("jobStatus").textContent = status;
+        document.getElementById("jobMessage").textContent =
+            job.message || "Processing...";
+
+        let progress = 15;
+
+        if (status === "VALIDATING") progress = 30;
+        if (status === "COMPLETED") progress = 100;
+        if (status === "FAILED") progress = 100;
+
+        document.getElementById("progressBar").style.width =
+            progress + "%";
+
+        document.getElementById("jobProgress").textContent =
+            progress + "%";
+
+        if (status === "COMPLETED") {
+            uploadMessage.textContent =
+                "Dataset ingestion completed successfully.";
+
+            document.getElementById("jobStatus").textContent =
+                "COMPLETED";
+
+            uploadButton.disabled = false;
+            uploadButton.textContent = "Upload another dataset";
+
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+
+            return;
+        }
+
+        if (status === "FAILED") {
+            uploadMessage.textContent =
+                "Processing failed: " + job.message;
+
+            uploadButton.disabled = false;
+            uploadButton.textContent = "Retry upload";
+
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+
+            return;
+        }
+
+    } catch (error) {
+        document.getElementById("jobMessage").textContent =
+            error.message;
+
+        if (pollingTimer) {
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+        }
+
+        uploadButton.disabled = false;
+        uploadButton.textContent = "Retry upload";
+    }
+}
+
+
+checkHealth();
+setInterval(checkHealth, 15000);

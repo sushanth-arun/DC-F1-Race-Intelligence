@@ -1,0 +1,44 @@
+services:
+  f1-worker-race:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile.worker
+    environment:
+      WORKER_TASK: race
+    ports:
+      - "127.0.0.1:5101:8000"
+    mem_limit: 384m
+    restart: unless-stopped
+
+  f1-worker-laps:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile.worker
+    environment:
+      WORKER_TASK: laps
+    ports:
+      - "127.0.0.1:5102:8000"
+    mem_limit: 384m
+    restart: unless-stopped
+
+  f1-worker-pits:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile.worker
+    environment:
+      WORKER_TASK: pits
+    ports:
+      - "127.0.0.1:5103:8000"
+    mem_limit: 384m
+    restart: unless-stopped
+
+  f1-worker-fan:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile.worker
+    environment:
+      WORKER_TASK: fan
+    ports:
+      - "127.0.0.1:5104:8000"
+    mem_limit: 384m
+    restart: unless-stopped

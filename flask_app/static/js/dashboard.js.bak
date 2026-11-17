@@ -1,0 +1,341 @@
+const $ = id => document.getElementById(id);
+const uploadForm = $("uploadForm");
+const fileInput = $("datasetFile");
+const fileLabel = $("fileLabel");
+const uploadButton = $("uploadButton");
+const uploadMessage = $("uploadMessage");
+
+let currentJobId = null;
+let pollingTimer = null;
+const charts = {};
+
+const palette = [
+    "#e10600", "#42a5f5", "#42d6a0", "#f5b942", "#a78bfa",
+    "#f472b6", "#22d3ee", "#fb923c", "#94a3b8", "#c084fc"
+];
+
+function setText(id, value) {
+    const element = $(id);
+    if (element) element.textContent = value ?? "—";
+}
+
+async function checkHealth() {
+    try {
+        const response = await fetch("/api/health");
+        const data = await response.json();
+        const connection = document.querySelector(".connection");
+        if (connection) {
+            connection.innerHTML = `<i></i>${data.status === "ONLINE" ? "HADOOP CONNECTED" : "HADOOP OFFLINE"}`;
+        }
+    } catch {
+        const connection = document.querySelector(".connection");
+        if (connection) connection.textContent = "CONNECTION ERROR";
+    }
+}
+
+fileInput.addEventListener("change", () => {
+    fileLabel.textContent = fileInput.files[0]?.name || "Choose race ZIP";
+});
+
+uploadForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const file = fileInput.files[0];
+
+    if (!file || !file.name.toLowerCase().endsWith(".zip")) {
+        uploadMessage.textContent = "Please select a ZIP archive.";
+        return;
+    }
+    if (file.size > 100 * 1024 * 1024) {
+        uploadMessage.textContent = "ZIP exceeds the 100 MB limit.";
+        return;
+    }
+
+    clearDashboard();
+
+    const body = new FormData();
+    body.append("file", file);
+
+    uploadButton.disabled = true;
+    uploadButton.textContent = "UPLOADING...";
+    uploadMessage.textContent = "Uploading and analysing race...";
+
+    try {
+        const response = await fetch("/api/upload", {method:"POST", body});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Upload failed");
+
+        currentJobId = data.job_id;
+        setText("jobId", "Job ID: " + currentJobId);
+        setText("jobStatus", data.status);
+        setText("jobMessage", data.message);
+
+        if (pollingTimer) clearInterval(pollingTimer);
+        await checkJobStatus();
+        pollingTimer = setInterval(checkJobStatus, 2000);
+    } catch (error) {
+        uploadMessage.textContent = error.message;
+        uploadButton.disabled = false;
+        uploadButton.textContent = "RETRY ANALYSIS ↗";
+    }
+});
+
+async function checkJobStatus() {
+    if (!currentJobId) return;
+    try {
+        const response = await fetch(`/api/jobs/${currentJobId}`);
+        const job = await response.json();
+        if (!response.ok) throw new Error(job.error || "Job lookup failed");
+
+        setText("jobStatus", job.status);
+        setText("jobMessage", job.message || "Processing...");
+        const progress = job.status === "COMPLETED" || job.status === "FAILED"
+            ? 100 : job.status === "VALIDATING" ? 40 : 15;
+
+        $("progressBar").style.width = progress + "%";
+        setText("jobProgress", progress + "%");
+
+        if (job.status === "COMPLETED") {
+            renderAnalytics(job.result.analytics);
+            uploadMessage.textContent = "Race uploaded and analysed successfully.";
+            uploadButton.disabled = false;
+            uploadButton.textContent = "ANALYSE ANOTHER RACE ↗";
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+        } else if (job.status === "FAILED") {
+            uploadMessage.textContent = "Processing failed: " + job.message;
+            uploadButton.disabled = false;
+            uploadButton.textContent = "RETRY ANALYSIS ↗";
+            clearInterval(pollingTimer);
+            pollingTimer = null;
+        }
+    } catch (error) {
+        setText("jobMessage", error.message);
+        if (pollingTimer) clearInterval(pollingTimer);
+        pollingTimer = null;
+        uploadButton.disabled = false;
+        uploadButton.textContent = "RETRY ANALYSIS ↗";
+    }
+}
+
+function drawChart(id, type, labels, datasets, extra = {}) {
+    const canvas = $(id);
+    if (!canvas) return;
+
+    if (charts[id]) charts[id].destroy();
+
+    const chartDatasets = datasets.map((dataset, index) => ({
+        ...dataset,
+        backgroundColor: dataset.backgroundColor || palette[index % palette.length],
+        borderColor: dataset.borderColor || palette[index % palette.length],
+        borderWidth: dataset.borderWidth ?? 1,
+        borderRadius: type === "bar" ? 5 : 0,
+        tension: 0.3,
+        pointRadius: type === "line" ? 2 : 0,
+        spanGaps: true
+    }));
+
+    charts[id] = new Chart(canvas, {
+        type,
+        data: {labels, datasets: chartDatasets},
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {mode:"index", intersect:false},
+            plugins: {
+                legend: {
+                    display: chartDatasets.length > 1 || type === "doughnut",
+                    labels: {color:"#c5cbd5", usePointStyle:true, boxWidth:8}
+                },
+                tooltip: {backgroundColor:"#10141c", titleColor:"#fff", bodyColor:"#d6dbe3"}
+            },
+            scales: type === "doughnut" ? {} : {
+                x: {ticks:{color:"#929baa", maxRotation:45, minRotation:0}, grid:{display:false}},
+                y: {beginAtZero: extra.beginAtZero ?? true, ticks:{color:"#929baa"}, grid:{color:"rgba(255,255,255,.06)"}}
+            },
+            ...extra.options
+        }
+    });
+}
+
+function renderTable(id, rows, columns, emptyMessage) {
+    const body = $(id);
+    if (!body) return;
+    if (!rows || !rows.length) {
+        body.innerHTML = `<tr><td colspan="${columns.length}">${emptyMessage}</td></tr>`;
+        return;
+    }
+    body.innerHTML = rows.map(row =>
+        "<tr>" + columns.map(column => `<td>${escapeHtml(column(row))}</td>`).join("") + "</tr>"
+    ).join("");
+}
+
+function escapeHtml(value) {
+    return String(value ?? "—").replace(/[&<>"']/g, char => ({
+        "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+    }[char]));
+}
+
+
+function clearDashboard() {
+    // Destroy old charts so previous-race data cannot remain visible.
+    Object.values(charts).forEach(chart => chart.destroy());
+    Object.keys(charts).forEach(id => delete charts[id]);
+
+    [
+        "winningTime", "totalDrivers", "totalConstructors", "totalLaps",
+        "winnerName", "winnerTeam", "fanName", "fanDetail",
+        "fastestName", "fastestDetail", "pitName", "pitDetail",
+        "poleName", "poleDetail", "gainName", "gainDetail"
+    ].forEach(id => setText(id, "—"));
+
+    setText("activeSeason", "ANALYSING NEW RACE");
+    setText("jobStatus", "UPLOADING");
+    setText("jobMessage", "Waiting for validation and analysis...");
+
+    [
+        "pitTable", "qualifyingTable", "constructorTable"
+    ].forEach(id => {
+        const body = $(id);
+        if (body) body.innerHTML = '<tr><td colspan="6">Waiting for new race data...</td></tr>';
+    });
+
+    setText("sectorMessage", "Waiting for new race data...");
+
+    $("progressBar").style.width = "5%";
+    setText("jobProgress", "5%");
+}
+
+function renderAnalytics(data) {
+    if (!data) return;
+
+    setText("activeSeason",
+        `SEASON ${data.race.season} · ROUND ${data.race.round} · ${data.race.race_id}`);
+    setText("winningTime", data.overview.winning_time || "Unavailable");
+    setText("totalDrivers", data.overview.drivers);
+    setText("totalConstructors", data.overview.constructors);
+    setText("totalLaps", data.overview.laps);
+
+    setText("winnerName", data.winner);
+    setText("winnerTeam", data.winner_team || "Race winner");
+
+    const fan = data.fan_favourite;
+    setText("fanName", fan?.driver);
+    setText("fanDetail", fan
+        ? `${Number(fan.votes).toLocaleString()} votes · ${fan.percentage}%`
+        : "Fan vote data unavailable");
+
+    const fastest = data.fastest_lap;
+    setText("fastestName", fastest?.driver);
+    setText("fastestDetail", fastest
+        ? `${fastest.time} · Lap ${fastest.lap}`
+        : "Fastest lap unavailable");
+
+    const pit = data.best_pit_stop;
+    setText("pitName", pit ? `${pit.stationary.toFixed(3)}s` : "Unavailable");
+    setText("pitDetail", pit
+        ? `${pit.driver} · Lap ${pit.lap} · ${pit.team}`
+        : "No pit-stop records");
+
+    const pole = data.pole;
+    setText("poleName", pole?.driver);
+    setText("poleDetail", pole
+        ? `P1 · ${pole.qualifying_time || "Qualifying time unavailable"}`
+        : "Qualifying data unavailable");
+
+    const gain = data.biggest_gain;
+    setText("gainName", gain?.driver);
+    setText("gainDetail", gain
+        ? `Gained ${gain.gain} places · P${gain.grid} to P${gain.finish}`
+        : "Position gain unavailable");
+
+    const bar = (id, dataSet, label) => {
+        if (!dataSet) return;
+        drawChart(id, "bar", dataSet.labels, [{
+            label, data: dataSet.values
+        }]);
+    };
+
+    bar("driverChart", data.driver_points, "Points");
+    bar("constructorChart", data.constructor_points, "Points");
+    bar("raceChart", data.finishing_positions, "Finish position");
+    bar("gainChart", data.position_gains, "Places gained");
+
+    if (data.pit_stops) {
+        drawChart("pitChart", "bar", data.pit_stops.labels, [{
+            label:"Average stationary time (seconds)",
+            data:data.pit_stops.values,
+            backgroundColor:"#42d6a0"
+        }]);
+    }
+
+    if (data.lap_times) {
+        drawChart("lapChart", "bar", data.lap_times.labels, [{
+            label:"Average lap time (seconds)",
+            data:data.lap_times.values,
+            backgroundColor:"#42a5f5"
+        }]);
+    }
+
+    if (data.lap_trend) {
+        drawChart("lapTrendChart", "line", data.lap_trend.labels,
+            data.lap_trend.datasets.map((series, index) => ({
+                label:series.label,
+                data:series.values,
+                borderColor:palette[index],
+                backgroundColor:palette[index],
+                fill:false
+            })), {beginAtZero:false});
+    }
+
+    if (data.tyre_usage) {
+        drawChart("tyreChart", "doughnut", data.tyre_usage.labels, [{
+            label:"Recorded laps by compound",
+            data:data.tyre_usage.values
+        }]);
+    }
+
+    if (data.consistency) {
+        drawChart("consistencyChart", "bar",
+            data.consistency.map(row => row.driver), [{
+                label:"Lap-time standard deviation (seconds)",
+                data:data.consistency.map(row => row.deviation),
+                backgroundColor:"#f5b942"
+            }]);
+    }
+
+    renderTable("pitTable", data.pit_stop_leaderboard, [
+        row => row.driver, row => row.team, row => row.lap,
+        row => row.stationary.toFixed(3) + " s"
+    ], "No pit-stop data");
+
+    renderTable("qualifyingTable", data.qualifying, [
+        row => "P" + row.qualifying_position,
+        row => row.driver,
+        row => row.team,
+        row => row.qualifying_time,
+        row => row.race_position ? "P" + row.race_position : "—",
+        row => row.gain === null ? "—" : (row.gain > 0 ? "+" : "") + row.gain
+    ], "No qualifying data");
+
+    renderTable("constructorTable", data.constructor_standings, [
+        row => row.position,
+        row => row.team,
+        row => row.race_points,
+        row => row.cumulative_points,
+        row => row.wins,
+        row => row.podiums
+    ], "No constructor standings data");
+
+    if (data.driver_of_the_day) {
+        drawChart("fanChart", "bar",
+            data.driver_of_the_day.map(row => row.driver), [{
+                label:"Fan votes",
+                data:data.driver_of_the_day.map(row => row.votes),
+                backgroundColor:"#f472b6"
+            }]);
+    }
+
+    setText("sectorMessage", data.sector_message ||
+        "Sector times are not included in the uploaded CSV files.");
+}
+

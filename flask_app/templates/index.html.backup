@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F1 Race Intelligence</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<header class="header">
+    <div class="logo">
+        <img src="{{ url_for('static', filename='images/f1-logo.svg') }}" alt="Formula 1">
+        <span>RACE <b>INTELLIGENCE</b></span>
+    </div>
+    <nav class="hadoop-nav">
+        <a href="http://localhost:9870" target="_blank" title="HDFS NameNode dashboard">
+            <i class="service-dot"></i> NameNode
+        </a>
+        <a href="http://localhost:9864" target="_blank" title="HDFS DataNode dashboard">
+            <i class="service-dot"></i> DataNode
+        </a>
+        <a href="http://localhost:8088" target="_blank" title="YARN ResourceManager dashboard">
+            <i class="service-dot"></i> YARN
+        </a>
+        <a href="http://localhost:8042" target="_blank" title="YARN NodeManager dashboard">
+            <i class="service-dot"></i> NodeManager
+        </a>
+    </nav>
+    <div class="connection"><i></i> HADOOP CONNECTED</div>
+</header>
+
+<main class="container">
+    <section class="upload-section">
+        <div>
+            <p class="eyebrow">FORMULA 1 · DATA INTELLIGENCE</p>
+            <h1>Every race tells a story.</h1>
+            <p>Upload a Grand Prix ZIP to explore driver, team and race performance.</p>
+        </div>
+        <form id="uploadForm">
+            <label class="file-button" for="datasetFile">
+                <span id="fileLabel">Choose race ZIP</span>
+            </label>
+            <input type="file" id="datasetFile" name="file" accept=".zip" hidden required>
+            <button type="submit" id="uploadButton">ANALYSE RACE ↗</button>
+        </form>
+        <p id="uploadMessage" class="message"></p>
+    </section>
+
+    <section class="processing">
+        <div class="process-line">
+            <strong id="jobStatus">READY</strong>
+            <span id="jobMessage">Waiting for dataset upload</span>
+        </div>
+        <div class="progress-track"><div id="progressBar"></div></div>
+        <div class="process-meta">
+            <small id="jobProgress">0%</small>
+            <small id="jobId">Job ID: —</small>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">THE BIG PICTURE</p><h2>Race overview</h2></div>
+            <span id="activeSeason">NO DATASET LOADED</span>
+        </div>
+        <div class="stats-grid">
+            <article class="stat"><small>WINNING TIME</small><h2 id="winningTime">—</h2></article>
+            <article class="stat"><small>DRIVERS</small><h2 id="totalDrivers">—</h2></article>
+            <article class="stat"><small>CONSTRUCTORS</small><h2 id="totalConstructors">—</h2></article>
+            <article class="stat"><small>LAPS COMPLETED</small><h2 id="totalLaps">—</h2></article>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">THE STANDOUTS</p><h2>Top performance</h2></div>
+        </div>
+        <div class="highlights-grid">
+            <article class="highlight winner-card">
+                <small>🏆 RACE WINNER</small><h2 id="winnerName">—</h2>
+                <p id="winnerTeam">Awaiting race data</p>
+            </article>
+            <article class="highlight">
+                <small>❤️ FAN FAVOURITE</small><h2 id="fanName">—</h2>
+                <p id="fanDetail">Driver of the Day votes</p>
+            </article>
+            <article class="highlight">
+                <small>⚡ FASTEST LAP</small><h2 id="fastestName">—</h2>
+                <p id="fastestDetail">Fastest recorded lap</p>
+            </article>
+            <article class="highlight">
+                <small>🔧 BEST PIT STOP</small><h2 id="pitName">—</h2>
+                <p id="pitDetail">Stationary stop duration</p>
+            </article>
+            <article class="highlight">
+                <small>🎯 POLE POSITION</small><h2 id="poleName">—</h2>
+                <p id="poleDetail">Qualifying performance</p>
+            </article>
+            <article class="highlight">
+                <small>📈 BIGGEST POSITION GAIN</small><h2 id="gainName">—</h2>
+                <p id="gainDetail">Grid to finish movement</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">CHAMPIONSHIP BATTLE</p><h2>Driver & constructor performance</h2></div>
+        </div>
+        <div class="charts-grid">
+            <article class="panel"><h3>Driver points · Race</h3><div class="chart-wrap"><canvas id="driverChart"></canvas></div></article>
+            <article class="panel"><h3>Constructor points · Race</h3><div class="chart-wrap"><canvas id="constructorChart"></canvas></div></article>
+            <article class="panel"><h3>Finishing positions</h3><div class="chart-wrap"><canvas id="raceChart"></canvas></div></article>
+            <article class="panel"><h3>Grid-to-finish position gain</h3><div class="chart-wrap"><canvas id="gainChart"></canvas></div></article>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">STRATEGY & EXECUTION</p><h2>Pit stop analysis</h2></div>
+        </div>
+        <div class="pit-layout">
+            <article class="panel"><h3>Average stationary pit time · Lower is better</h3><div class="chart-wrap"><canvas id="pitChart"></canvas></div></article>
+            <article class="panel">
+                <h3>Fastest pit stops</h3>
+                <div class="table-scroll">
+                    <table><thead><tr><th>Driver</th><th>Team</th><th>Lap</th><th>Stop time</th></tr></thead>
+                    <tbody id="pitTable"><tr><td colspan="4">No pit-stop data</td></tr></tbody></table>
+                </div>
+            </article>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">PACE & CONSISTENCY</p><h2>Lap-time intelligence</h2></div>
+        </div>
+        <div class="charts-grid">
+            <article class="panel"><h3>Lap-by-lap pace · Top five finishers</h3><div class="chart-wrap"><canvas id="lapTrendChart"></canvas></div></article>
+            <article class="panel"><h3>Tyre compound usage</h3><div class="chart-wrap"><canvas id="tyreChart"></canvas></div></article>
+            <article class="panel"><h3>Lap-time consistency · Lower deviation is better</h3><div class="chart-wrap"><canvas id="consistencyChart"></canvas></div></article>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">SATURDAY TO SUNDAY</p><h2>Qualifying vs race result</h2></div>
+        </div>
+        <article class="panel">
+            <div class="table-scroll">
+                <table>
+                    <thead><tr><th>Quali</th><th>Driver</th><th>Team</th><th>Qualifying time</th><th>Race finish</th><th>Positions gained</th></tr></thead>
+                    <tbody id="qualifyingTable"><tr><td colspan="6">No qualifying data</td></tr></tbody>
+                </table>
+            </div>
+        </article>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">TEAM CHAMPIONSHIP</p><h2>Constructor standings</h2></div>
+        </div>
+        <article class="panel">
+            <div class="table-scroll">
+                <table>
+                    <thead><tr><th>Position</th><th>Constructor</th><th>Race points</th><th>Season points</th><th>Wins</th><th>Podiums</th></tr></thead>
+                    <tbody id="constructorTable"><tr><td colspan="6">No standings data</td></tr></tbody>
+                </table>
+            </div>
+        </article>
+    </section>
+
+    <section class="section">
+        <div class="section-title">
+            <div><p class="eyebrow">FAN ENGAGEMENT</p><h2>Driver of the Day</h2></div>
+        </div>
+        <article class="panel"><div class="chart-wrap short-chart"><canvas id="fanChart"></canvas></div></article>
+    </section>
+
+    <footer>F1 RACE INTELLIGENCE · APACHE HADOOP 3.5.0</footer>
+</main>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
